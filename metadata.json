@@ -1,0 +1,6 @@
+{
+  "name": "HAIGENX1 Miner",
+  "description": "Game mô phỏng đào coin ảo HAIGENX1 Miner (phiên bản 0.0.1) với trợ lý AI, sàn mô phỏng và ví ảo cục bộ.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
