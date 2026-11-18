@@ -13,8 +13,11 @@ jobs:
           distribution: temurin
           java-version: 17
       - uses: gradle/actions/setup-gradle@v4
-      - name: Decode debug keystore
-        run: base64 -d debug.keystore.base64 > debug.keystore
+      - name: Create debug keystore
+        run: |
+          if [ ! -f debug.keystore ]; then
+            keytool -genkeypair -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+          fi
       - run: chmod +x ./gradlew && ./gradlew assembleDebug
       - uses: actions/upload-artifact@v4
         with:
