@@ -15,36 +15,64 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalContext
+import androidx.credentials.CredentialManager
+import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.APPLICATION_KEY
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.example.core.AppLanguage
+import com.example.core.attemptAutoSignIn
+import com.example.core.authStateFlow
 import com.example.core.configureAppCheck
+import com.example.core.onGoogleSignInClicked
+import com.example.core.signOutWithCleanup
 import com.example.core.stringsFor
+import com.example.data.local.AppDatabase
+import com.example.data.local.GamePreferencesRepository
+import com.example.data.local.MiningHistoryRepository
+import com.example.data.local.TradeHistoryRepository
+import com.example.data.remote.CloudSyncRepository
 import com.example.ui.components.FixedSimulationTopBar
 import com.example.ui.components.HaigenxBottomBar
 import com.example.ui.components.MainTab
 import com.example.ui.components.ROUTE_SETTINGS
 import com.example.ui.screens.AiAssistantScreen
+import com.example.ui.screens.AuthScreen
 import com.example.ui.screens.MarketScreen
 import com.example.ui.screens.MiningScreen
 import com.example.ui.screens.SettingsScreen
+import com.example.ui.screens.ShopScreen
 import com.example.ui.screens.WalletScreen
 import com.example.ui.theme.HaigenxTheme
 import com.example.ui.theme.ObsidianBlack
 import com.example.viewmodel.GameViewModel
+import com.google.firebase.Firebase
+import com.google.firebase.auth.FirebaseUser
+import com.google.firebase.auth.auth
+import com.google.firebase.firestore.FirebaseFirestore
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Configure Firebase App Check with launch intent before any UI or ViewModels
+        // STEP 1: Configure App Check with launch intent before any UI, ViewModels, or Firebase ops
         configureAppCheck(this, intent)
 
         enableEdgeToEdge(
@@ -54,27 +82,109 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             HaigenxTheme {
-                HaigenxMinerApp()
+                AppNavigation()
             }
         }
     }
 }
 
 @Composable
-fun HaigenxMinerApp(
-    gameViewModel: GameViewModel = viewModel()
+fun AppNavigation() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val credentialManager = remember(context) { CredentialManager.create(context) }
+    val prefsRepo = remember(context) { GamePreferencesRepository(context.applicationContext) }
+    val savedPrefs by prefsRepo.gameDataFlow.collectAsStateWithLifecycle(
+        initialValue = com.example.data.local.PersistedGameData()
+    )
+
+    val auth = remember { Firebase.auth }
+    val currentUser by auth.authStateFlow().collectAsStateWithLifecycle(initialValue = auth.currentUser)
+    var authChecked by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        if (auth.currentUser == null) {
+            attemptAutoSignIn(
+                context = context,
+                credentialManager = credentialManager,
+                scope = scope,
+                onAuthSuccess = { authChecked = true },
+                onUnauthenticated = { authChecked = true }
+            )
+        } else {
+            authChecked = true
+        }
+    }
+
+    val user = currentUser
+    if (user == null) {
+        AuthScreen(
+            language = savedPrefs.language,
+            onSelectLanguage = { newLang ->
+                scope.launch { prefsRepo.saveLanguage(newLang) }
+            },
+            onAuthSuccess = { authChecked = true }
+        )
+    } else {
+        // Key by uid so signing out or switching Google accounts cleanly resets ViewModel & Firestore listeners
+        key(user.uid) {
+            HaigenxAuthenticatedApp(
+                firebaseUser = user,
+                credentialManager = credentialManager
+            )
+        }
+    }
+}
+
+@Composable
+fun HaigenxAuthenticatedApp(
+    firebaseUser: FirebaseUser,
+    credentialManager: CredentialManager
 ) {
+    val uid = firebaseUser.uid
+    val displayName = firebaseUser.displayName?.takeIf { it.isNotBlank() }
+        ?: firebaseUser.email?.substringBefore("@")
+        ?: "HAIGENX1 Miner"
+
+    val gameViewModel: GameViewModel = viewModel(
+        key = uid,
+        factory = viewModelFactory {
+            initializer {
+                val app = checkNotNull(this[APPLICATION_KEY]) {
+                    "APPLICATION_KEY missing from CreationExtras"
+                }
+                val databaseId = app.getString(R.string.firestore_database_id)
+                val db = FirebaseFirestore.getInstance(databaseId)
+                val roomDb = AppDatabase.getInstance(app)
+                GameViewModel(
+                    currentUserId = uid,
+                    displayName = displayName,
+                    prefsRepo = GamePreferencesRepository(app),
+                    miningHistoryRepo = MiningHistoryRepository(roomDb.miningRecordDao()),
+                    tradeHistoryRepo = TradeHistoryRepository(roomDb.tradeRecordDao()),
+                    cloudSyncRepo = CloudSyncRepository(db)
+                )
+            }
+        }
+    )
+
     val navController = rememberNavController()
+    val scope = rememberCoroutineScope()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route ?: MainTab.MINING.route
 
+    val context = LocalContext.current
     val language by gameViewModel.language.collectAsStateWithLifecycle()
     val miningState by gameViewModel.miningState.collectAsStateWithLifecycle()
     val marketState by gameViewModel.marketState.collectAsStateWithLifecycle()
+    val tradingState by gameViewModel.tradingState.collectAsStateWithLifecycle()
     val adBoostDialogState by gameViewModel.adBoostDialogState.collectAsStateWithLifecycle()
     val chatMessages by gameViewModel.chatMessages.collectAsStateWithLifecycle()
     val aiUiState by gameViewModel.aiUiState.collectAsStateWithLifecycle()
     val miningHistory by gameViewModel.miningHistory.collectAsStateWithLifecycle()
+    val tradeHistory by gameViewModel.tradeHistory.collectAsStateWithLifecycle()
+    val participantCount by gameViewModel.participantCount.collectAsStateWithLifecycle()
+    val accountDisplayName by gameViewModel.accountDisplayName.collectAsStateWithLifecycle()
 
     val strings = stringsFor(language)
     val isSettings = currentRoute == ROUTE_SETTINGS
@@ -151,9 +261,29 @@ fun HaigenxMinerApp(
             composable(MainTab.MINING.route) {
                 MiningScreen(
                     state = miningState,
+                    participantCount = participantCount,
                     language = language,
                     strings = strings,
-                    onMineTap = { gameViewModel.onMineTap() }
+                    onMineTap = { gameViewModel.onMineTap() },
+                    onOpenShopTab = {
+                        navController.navigate(MainTab.SHOP.route) {
+                            popUpTo(navController.graph.findStartDestination().id) {
+                                saveState = true
+                            }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
+                    }
+                )
+            }
+
+            composable(MainTab.SHOP.route) {
+                ShopScreen(
+                    miningState = miningState,
+                    upgradeItems = gameViewModel.getUpgradeItems(strings),
+                    language = language,
+                    strings = strings,
+                    onPurchaseUpgrade = { type -> gameViewModel.purchaseUpgrade(type) }
                 )
             }
 
@@ -174,9 +304,14 @@ fun HaigenxMinerApp(
             composable(MainTab.MARKET.route) {
                 MarketScreen(
                     state = marketState,
+                    tradingState = tradingState,
+                    tradeHistory = tradeHistory,
                     minedBalanceHx1 = miningState.balanceHx1,
+                    participantCount = participantCount,
                     language = language,
-                    strings = strings
+                    strings = strings,
+                    onSelectLeverage = { lev -> gameViewModel.selectLeverage(lev) },
+                    onOpenTrade = { dir -> gameViewModel.openTrade(dir) }
                 )
             }
 
@@ -208,9 +343,30 @@ fun HaigenxMinerApp(
                 }
             ) {
                 SettingsScreen(
+                    accountDisplayName = accountDisplayName,
+                    accountEmail = firebaseUser.email,
                     currentLanguage = language,
                     strings = strings,
                     onSelectLanguage = { newLang -> gameViewModel.setLanguage(newLang) },
+                    onSaveDisplayName = { newName -> gameViewModel.updateDisplayName(newName) },
+                    onSwitchGoogleAccount = {
+                        onGoogleSignInClicked(
+                            context = context,
+                            credentialManager = credentialManager,
+                            onAuthSuccess = {},
+                            onAuthError = {},
+                            scope = scope
+                        )
+                    },
+                    onSignOut = {
+                        signOutWithCleanup(
+                            credentialManager = credentialManager,
+                            scope = scope,
+                            onBeforeFirebaseSignOut = {
+                                gameViewModel.flushStateBeforeSignOut()
+                            }
+                        )
+                    },
                     onNavigateBack = { navController.popBackStack() },
                     modifier = Modifier.navigationBarsPadding()
                 )

@@ -1,5 +1,7 @@
 package com.example.ui.components
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
@@ -8,14 +10,30 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Groups
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -30,14 +48,26 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.R
+import com.example.core.AppLanguage
+import com.example.core.AppStrings
+import com.example.ui.theme.CharcoalCard
+import com.example.ui.theme.GoldBorder
 import com.example.ui.theme.GoldBright
 import com.example.ui.theme.GoldDeep
 import com.example.ui.theme.GoldPrimary
+import com.example.ui.theme.GoldSubtleBg
+import com.example.ui.theme.MonoMetricSmall
+import com.example.ui.theme.TextMuted
 import kotlinx.coroutines.delay
+import java.text.NumberFormat
+import java.util.Locale
 import kotlin.math.sin
 import kotlin.random.Random
 
@@ -207,3 +237,78 @@ fun rememberAnimatedDouble(
 
     return displayValue
 }
+
+/**
+ * Compact live Firebase participants counter badge with rolling digit animation.
+ * Displays "--" when network/Firestore count is unavailable.
+ */
+@Composable
+fun ParticipantsCounterBadge(
+    count: Long?,
+    language: AppLanguage,
+    strings: AppStrings,
+    modifier: Modifier = Modifier
+) {
+    val displayValue = remember(count, language, strings.participantsOfflinePlaceholder) {
+        if (count == null) {
+            strings.participantsOfflinePlaceholder
+        } else {
+            val locale = if (language == AppLanguage.VI) Locale("vi", "VN") else Locale.US
+            NumberFormat.getIntegerInstance(locale).format(count)
+        }
+    }
+
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(50))
+            .background(CharcoalCard.copy(alpha = 0.94f))
+            .border(1.dp, GoldBorder, RoundedCornerShape(50))
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+            .testTag("participants_counter_badge"),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(22.dp)
+                .clip(CircleShape)
+                .background(GoldSubtleBg),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.Groups,
+                contentDescription = strings.participantsLabel,
+                tint = GoldPrimary,
+                modifier = Modifier.size(15.dp)
+            )
+        }
+
+        Text(
+            text = strings.participantsLabel,
+            style = MaterialTheme.typography.labelMedium.copy(fontSize = 12.sp),
+            color = TextMuted
+        )
+
+        AnimatedContent(
+            targetState = displayValue,
+            transitionSpec = {
+                (slideInVertically(animationSpec = tween(260)) { height -> height } +
+                    fadeIn(animationSpec = tween(220)))
+                    .togetherWith(
+                        slideOutVertically(animationSpec = tween(260)) { height -> -height } +
+                            fadeOut(animationSpec = tween(180))
+                    )
+                    .using(SizeTransform(clip = false))
+            },
+            label = "participantCountRoll"
+        ) { target ->
+            Text(
+                text = target,
+                style = MonoMetricSmall.copy(fontSize = 13.sp, fontWeight = FontWeight.Bold),
+                color = GoldBright,
+                modifier = Modifier.testTag("participants_count_value")
+            )
+        }
+    }
+}
+

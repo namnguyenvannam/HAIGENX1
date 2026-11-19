@@ -5,6 +5,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.doublePreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -19,6 +20,12 @@ private val Context.gameDataStore: DataStore<Preferences> by preferencesDataStor
 data class PersistedGameData(
     val balanceHx1: Double = 0.0,
     val energy: Double = 100.0,
+    val hashrateLevel: Int = 0,
+    val tapPowerLevel: Int = 0,
+    val energyLevel: Int = 0,
+    val multiplierLevel: Int = 0,
+    val turboMultiplierLevel: Int = 0,
+    val customDisplayName: String = "",
     val boostExpiresAtMillis: Long = 0L,
     val lastActiveMillis: Long = System.currentTimeMillis(),
     val simulatedPriceUsdt: Double = DEFAULT_INITIAL_PRICE_USDT,
@@ -36,6 +43,12 @@ class GamePreferencesRepository(private val context: Context) {
     private object Keys {
         val BALANCE_HX1 = doublePreferencesKey("balance_hx1")
         val ENERGY = doublePreferencesKey("energy")
+        val HASHRATE_LEVEL = intPreferencesKey("hashrate_level")
+        val TAP_POWER_LEVEL = intPreferencesKey("tap_power_level")
+        val ENERGY_LEVEL = intPreferencesKey("energy_level")
+        val MULTIPLIER_LEVEL = intPreferencesKey("multiplier_level")
+        val TURBO_MULTIPLIER_LEVEL = intPreferencesKey("turbo_multiplier_level")
+        val CUSTOM_DISPLAY_NAME = stringPreferencesKey("custom_display_name")
         val BOOST_EXPIRES_AT = longPreferencesKey("boost_expires_at")
         val LAST_ACTIVE_MILLIS = longPreferencesKey("last_active_millis")
         val SIMULATED_PRICE_USDT = doublePreferencesKey("simulated_price_usdt")
@@ -47,6 +60,12 @@ class GamePreferencesRepository(private val context: Context) {
         PersistedGameData(
             balanceHx1 = prefs[Keys.BALANCE_HX1] ?: 0.0,
             energy = prefs[Keys.ENERGY] ?: 100.0,
+            hashrateLevel = (prefs[Keys.HASHRATE_LEVEL] ?: 0).coerceIn(0, 100),
+            tapPowerLevel = (prefs[Keys.TAP_POWER_LEVEL] ?: 0).coerceIn(0, 100),
+            energyLevel = (prefs[Keys.ENERGY_LEVEL] ?: 0).coerceIn(0, 100),
+            multiplierLevel = (prefs[Keys.MULTIPLIER_LEVEL] ?: 0).coerceIn(0, 100),
+            turboMultiplierLevel = (prefs[Keys.TURBO_MULTIPLIER_LEVEL] ?: 0).coerceIn(0, 100),
+            customDisplayName = prefs[Keys.CUSTOM_DISPLAY_NAME] ?: "",
             boostExpiresAtMillis = prefs[Keys.BOOST_EXPIRES_AT] ?: 0L,
             lastActiveMillis = prefs[Keys.LAST_ACTIVE_MILLIS] ?: System.currentTimeMillis(),
             simulatedPriceUsdt = prefs[Keys.SIMULATED_PRICE_USDT]
@@ -71,6 +90,34 @@ class GamePreferencesRepository(private val context: Context) {
         }
     }
 
+    suspend fun saveUpgradesAndBalance(
+        balanceHx1: Double,
+        energy: Double,
+        hashrateLevel: Int,
+        tapPowerLevel: Int,
+        energyLevel: Int,
+        multiplierLevel: Int,
+        turboMultiplierLevel: Int,
+        lastActiveMillis: Long
+    ) {
+        context.gameDataStore.edit { prefs ->
+            prefs[Keys.BALANCE_HX1] = balanceHx1
+            prefs[Keys.ENERGY] = energy
+            prefs[Keys.HASHRATE_LEVEL] = hashrateLevel
+            prefs[Keys.TAP_POWER_LEVEL] = tapPowerLevel
+            prefs[Keys.ENERGY_LEVEL] = energyLevel
+            prefs[Keys.MULTIPLIER_LEVEL] = multiplierLevel
+            prefs[Keys.TURBO_MULTIPLIER_LEVEL] = turboMultiplierLevel
+            prefs[Keys.LAST_ACTIVE_MILLIS] = lastActiveMillis
+        }
+    }
+
+    suspend fun saveCustomDisplayName(displayName: String) {
+        context.gameDataStore.edit { prefs ->
+            prefs[Keys.CUSTOM_DISPLAY_NAME] = displayName.trim().take(80)
+        }
+    }
+
     suspend fun saveMarketSnapshot(priceUsdt: Double, usdtIndex: Double) {
         context.gameDataStore.edit { prefs ->
             prefs[Keys.SIMULATED_PRICE_USDT] = priceUsdt
@@ -78,22 +125,39 @@ class GamePreferencesRepository(private val context: Context) {
         }
     }
 
-    suspend fun saveLanguage(language: AppLanguage) {
+    suspend fun applyCloudSnapshot(
+        displayName: String,
+        balanceHx1: Double,
+        energy: Double,
+        hashrateLevel: Int,
+        tapPowerLevel: Int,
+        energyLevel: Int,
+        multiplierLevel: Int,
+        turboMultiplierLevel: Int,
+        boostExpiresAtMillis: Long,
+        simulatedPriceUsdt: Double,
+        usdtVirtualIndex: Double,
+        lastActiveMillis: Long
+    ) {
         context.gameDataStore.edit { prefs ->
-            prefs[Keys.LANGUAGE] = language.code
+            prefs[Keys.CUSTOM_DISPLAY_NAME] = displayName.trim().take(80)
+            prefs[Keys.BALANCE_HX1] = balanceHx1
+            prefs[Keys.ENERGY] = energy
+            prefs[Keys.HASHRATE_LEVEL] = hashrateLevel
+            prefs[Keys.TAP_POWER_LEVEL] = tapPowerLevel
+            prefs[Keys.ENERGY_LEVEL] = energyLevel
+            prefs[Keys.MULTIPLIER_LEVEL] = multiplierLevel
+            prefs[Keys.TURBO_MULTIPLIER_LEVEL] = turboMultiplierLevel
+            prefs[Keys.BOOST_EXPIRES_AT] = boostExpiresAtMillis
+            prefs[Keys.SIMULATED_PRICE_USDT] = simulatedPriceUsdt
+            prefs[Keys.USDT_VIRTUAL_INDEX] = usdtVirtualIndex
+            prefs[Keys.LAST_ACTIVE_MILLIS] = lastActiveMillis
         }
     }
 
-    suspend fun resetAll(keepLanguage: AppLanguage) {
+    suspend fun saveLanguage(language: AppLanguage) {
         context.gameDataStore.edit { prefs ->
-            prefs.clear()
-            prefs[Keys.LANGUAGE] = keepLanguage.code
-            prefs[Keys.BALANCE_HX1] = 0.0
-            prefs[Keys.ENERGY] = 100.0
-            prefs[Keys.BOOST_EXPIRES_AT] = 0L
-            prefs[Keys.LAST_ACTIVE_MILLIS] = System.currentTimeMillis()
-            prefs[Keys.SIMULATED_PRICE_USDT] = PersistedGameData.DEFAULT_INITIAL_PRICE_USDT
-            prefs[Keys.USDT_VIRTUAL_INDEX] = PersistedGameData.DEFAULT_USDT_INDEX
+            prefs[Keys.LANGUAGE] = language.code
         }
     }
 }

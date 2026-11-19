@@ -1,0 +1,177 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- GLOBAL HARDENED HELPERS ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // --- VALIDATION HELPERS ---
+    function isValidUserGameProfile(data, userId) {
+      return data.userId is string && data.userId == userId &&
+             data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80 &&
+             data.balanceHx1 is number && data.balanceHx1 >= 0 &&
+             data.energy is number && data.energy >= 0 &&
+             data.hashrateLevel is int && data.hashrateLevel >= 0 && data.hashrateLevel <= 100 &&
+             data.tapPowerLevel is int && data.tapPowerLevel >= 0 && data.tapPowerLevel <= 100 &&
+             data.energyLevel is int && data.energyLevel >= 0 && data.energyLevel <= 100 &&
+             data.multiplierLevel is int && data.multiplierLevel >= 0 && data.multiplierLevel <= 100 &&
+             data.turboMultiplierLevel is int && data.turboMultiplierLevel >= 0 && data.turboMultiplierLevel <= 100 &&
+             data.boostExpiresAtMillis is int && data.boostExpiresAtMillis >= 0 &&
+             data.simulatedPriceUsdt is number && data.simulatedPriceUsdt > 0 &&
+             data.usdtVirtualIndex is number && data.usdtVirtualIndex >= 0 &&
+             data.lastActiveMillis is int && data.lastActiveMillis >= 0 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidParticipant(data, participantId) {
+      return data.userId is string && data.userId == participantId &&
+             data.createdAt is timestamp && data.createdAt <= request.time;
+    }
+
+    function isValidTradeRecord(data, userId) {
+      return data.userId is string && data.userId == userId &&
+             data.direction is string && (data.direction == 'BUY' || data.direction == 'SHORT') &&
+             data.leverage is int && data.leverage >= 1 && data.leverage <= 10 &&
+             data.entryFeeHx1 is number && data.entryFeeHx1 > 0 &&
+             data.entryPriceUsdt is number && data.entryPriceUsdt > 0 &&
+             data.exitPriceUsdt is number && data.exitPriceUsdt > 0 &&
+             data.outcome is string && (data.outcome == 'WIN' || data.outcome == 'LOSS' || data.outcome == 'TIE') &&
+             data.payoutHx1 is number && data.payoutHx1 >= 0 &&
+             data.netPnlHx1 is number &&
+             data.timestampMillis is int && data.timestampMillis >= 0 &&
+             data.createdAt is timestamp && data.createdAt <= request.time;
+    }
+
+    function isValidMiningRecord(data, userId) {
+      return data.userId is string && data.userId == userId &&
+             data.amountHx1 is number && data.amountHx1 > 0 &&
+             data.sourceType is string && (data.sourceType == 'MANUAL' || data.sourceType == 'AUTO' || data.sourceType == 'BOOST_BONUS') &&
+             data.hashrateSnapshot is number && data.hashrateSnapshot >= 0 &&
+             data.timestampMillis is int && data.timestampMillis >= 0 &&
+             data.createdAt is timestamp && data.createdAt <= request.time;
+    }
+
+    // --- COLLECTION RULES ---
+    // Unique participant counter: create-once per authenticated UID, read/count allowed, update/delete forbidden
+    match /participants/{participantId} {
+      allow get, list: if isSignedIn();
+
+      allow create: if isOwner(participantId) &&
+                       isValidId(participantId) &&
+                       !exists(/databases/$(database)/documents/participants/$(participantId)) &&
+                       incoming().keys().hasAll(['userId', 'createdAt']) &&
+                       incoming().keys().hasOnly(['userId', 'createdAt']) &&
+                       isValidParticipant(incoming(), participantId);
+
+      allow update, delete: if false;
+    }
+
+    match /users/{userId} {
+      allow get: if isOwner(userId) && isValidId(userId);
+      allow list: if false;
+
+      allow create: if isOwner(userId) &&
+                       isValidId(userId) &&
+                       incoming().keys().hasAll([
+                         'userId', 'displayName', 'balanceHx1', 'energy',
+                         'hashrateLevel', 'tapPowerLevel', 'energyLevel',
+                         'multiplierLevel', 'turboMultiplierLevel',
+                         'boostExpiresAtMillis', 'simulatedPriceUsdt',
+                         'usdtVirtualIndex', 'lastActiveMillis', 'createdAt', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'userId', 'displayName', 'balanceHx1', 'energy',
+                         'hashrateLevel', 'tapPowerLevel', 'energyLevel',
+                         'multiplierLevel', 'turboMultiplierLevel',
+                         'boostExpiresAtMillis', 'simulatedPriceUsdt',
+                         'usdtVirtualIndex', 'lastActiveMillis', 'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidUserGameProfile(incoming(), userId);
+
+      allow update: if isOwner(userId) &&
+                       isValidId(userId) &&
+                       isValidUserGameProfile(incoming(), userId) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'displayName', 'balanceHx1', 'energy',
+                         'hashrateLevel', 'tapPowerLevel', 'energyLevel',
+                         'multiplierLevel', 'turboMultiplierLevel',
+                         'boostExpiresAtMillis', 'simulatedPriceUsdt',
+                         'usdtVirtualIndex', 'lastActiveMillis', 'updatedAt'
+                       ]);
+
+      allow delete: if isOwner(userId) && isValidId(userId);
+
+      // Settled BUY/SHORT leveraged trades (append-only)
+      match /trades/{tradeId} {
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(tradeId);
+        allow list: if isOwner(userId) && isValidId(userId);
+
+        allow create: if isOwner(userId) &&
+                         isValidId(userId) &&
+                         isValidId(tradeId) &&
+                         incoming().keys().hasAll([
+                           'userId', 'direction', 'leverage', 'entryFeeHx1',
+                           'entryPriceUsdt', 'exitPriceUsdt', 'outcome',
+                           'payoutHx1', 'netPnlHx1', 'timestampMillis', 'createdAt'
+                         ]) &&
+                         incoming().keys().hasOnly([
+                           'userId', 'direction', 'leverage', 'entryFeeHx1',
+                           'entryPriceUsdt', 'exitPriceUsdt', 'outcome',
+                           'payoutHx1', 'netPnlHx1', 'timestampMillis', 'createdAt'
+                         ]) &&
+                         isValidTradeRecord(incoming(), userId);
+
+        allow update: if false;
+        allow delete: if isOwner(userId) && isValidId(userId) && isValidId(tradeId);
+      }
+
+      // Mining history batches (append-only)
+      match /miningRecords/{recordId} {
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(recordId);
+        allow list: if isOwner(userId) && isValidId(userId);
+
+        allow create: if isOwner(userId) &&
+                         isValidId(userId) &&
+                         isValidId(recordId) &&
+                         incoming().keys().hasAll([
+                           'userId', 'amountHx1', 'sourceType',
+                           'hashrateSnapshot', 'timestampMillis', 'createdAt'
+                         ]) &&
+                         incoming().keys().hasOnly([
+                           'userId', 'amountHx1', 'sourceType',
+                           'hashrateSnapshot', 'timestampMillis', 'createdAt'
+                         ]) &&
+                         isValidMiningRecord(incoming(), userId);
+
+        allow update: if false;
+        allow delete: if isOwner(userId) && isValidId(userId) && isValidId(recordId);
+      }
+    }
+  }
+}

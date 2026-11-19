@@ -1,0 +1,244 @@
+{
+  "entities": {
+    "UserGameProfile": {
+      "title": "UserGameProfile",
+      "description": "Synced player profile, balance, mining upgrade levels, and market snapshot for HAIGENX1 Miner.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Authenticated Firebase UID owning this profile."
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Player display name from Google account or custom profile name."
+        },
+        "balanceHx1": {
+          "type": "number",
+          "description": "Current HAIGENX1 coin balance."
+        },
+        "energy": {
+          "type": "number",
+          "description": "Current mining energy level."
+        },
+        "hashrateLevel": {
+          "type": "integer",
+          "description": "Upgrade level for ASIC Core passive hashrate."
+        },
+        "tapPowerLevel": {
+          "type": "integer",
+          "description": "Upgrade level for manual tap extraction power."
+        },
+        "energyLevel": {
+          "type": "integer",
+          "description": "Upgrade level for Quantum Cell energy capacity and regen."
+        },
+        "multiplierLevel": {
+          "type": "integer",
+          "description": "Permanent Overclock Multiplier upgrade level (+0.25x per level)."
+        },
+        "turboMultiplierLevel": {
+          "type": "integer",
+          "description": "Permanent Quantum Turbo Rig multiplier level (+0.50x per level)."
+        },
+        "boostExpiresAtMillis": {
+          "type": "integer",
+          "description": "Epoch milliseconds when 3x AI Boost expires."
+        },
+        "simulatedPriceUsdt": {
+          "type": "number",
+          "description": "Latest shared HAIGENX1/USDT market price."
+        },
+        "usdtVirtualIndex": {
+          "type": "number",
+          "description": "Latest inverse USDT index value."
+        },
+        "lastActiveMillis": {
+          "type": "integer",
+          "description": "Epoch milliseconds of last active mining snapshot."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp set via FieldValue.serverTimestamp() at profile creation."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp updated via FieldValue.serverTimestamp() on sync."
+        }
+      },
+      "required": [
+        "userId",
+        "displayName",
+        "balanceHx1",
+        "energy",
+        "hashrateLevel",
+        "tapPowerLevel",
+        "energyLevel",
+        "multiplierLevel",
+        "turboMultiplierLevel",
+        "boostExpiresAtMillis",
+        "simulatedPriceUsdt",
+        "usdtVirtualIndex",
+        "lastActiveMillis",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Participant": {
+      "title": "Participant",
+      "description": "Unique immutable participant registration created once per authenticated user UID for server count aggregation.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Authenticated Firebase UID matching document ID."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp recorded once when participant joins."
+        }
+      },
+      "required": [
+        "userId",
+        "createdAt"
+      ]
+    },
+    "TradeRecord": {
+      "title": "TradeRecord",
+      "description": "Settled 30-second leveraged BUY or SHORT simulated trade.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Owner Firebase UID."
+        },
+        "direction": {
+          "type": "string",
+          "enum": ["BUY", "SHORT"],
+          "description": "Trade direction."
+        },
+        "leverage": {
+          "type": "integer",
+          "description": "Leverage multiplier from 1 to 10."
+        },
+        "entryFeeHx1": {
+          "type": "number",
+          "description": "Entry fee paid in HAIGENX1 (10 * leverage)."
+        },
+        "entryPriceUsdt": {
+          "type": "number",
+          "description": "HAIGENX1/USDT price at trade entry."
+        },
+        "exitPriceUsdt": {
+          "type": "number",
+          "description": "HAIGENX1/USDT price after 30s settlement."
+        },
+        "outcome": {
+          "type": "string",
+          "enum": ["WIN", "LOSS", "TIE"],
+          "description": "Settlement outcome."
+        },
+        "payoutHx1": {
+          "type": "number",
+          "description": "Total HAIGENX1 credited back at settlement."
+        },
+        "netPnlHx1": {
+          "type": "number",
+          "description": "Net profit or loss in HAIGENX1."
+        },
+        "timestampMillis": {
+          "type": "integer",
+          "description": "Settlement timestamp in epoch milliseconds."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp set via FieldValue.serverTimestamp()."
+        }
+      },
+      "required": [
+        "userId",
+        "direction",
+        "leverage",
+        "entryFeeHx1",
+        "entryPriceUsdt",
+        "exitPriceUsdt",
+        "outcome",
+        "payoutHx1",
+        "netPnlHx1",
+        "timestampMillis",
+        "createdAt"
+      ]
+    },
+    "MiningRecord": {
+      "title": "MiningRecord",
+      "description": "Logged HAIGENX1 mining batch record.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Owner Firebase UID."
+        },
+        "amountHx1": {
+          "type": "number",
+          "description": "Amount of HAIGENX1 mined."
+        },
+        "sourceType": {
+          "type": "string",
+          "enum": ["MANUAL", "AUTO", "BOOST_BONUS"],
+          "description": "Source of mining batch."
+        },
+        "hashrateSnapshot": {
+          "type": "number",
+          "description": "Hashrate snapshot during mining."
+        },
+        "timestampMillis": {
+          "type": "integer",
+          "description": "Mining batch timestamp in epoch milliseconds."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp set via FieldValue.serverTimestamp()."
+        }
+      },
+      "required": [
+        "userId",
+        "amountHx1",
+        "sourceType",
+        "hashrateSnapshot",
+        "timestampMillis",
+        "createdAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/participants/{participantId}": {
+      "schema": {
+        "$ref": "#/entities/Participant"
+      },
+      "description": "Append-only once-per-UID participant counter records."
+    },
+    "/users/{userId}": {
+      "schema": {
+        "$ref": "#/entities/UserGameProfile"
+      },
+      "description": "User profile document storing HAIGENX1 balance, mining upgrades, multipliers, and market snapshot."
+    },
+    "/users/{userId}/trades/{tradeId}": {
+      "schema": {
+        "$ref": "#/entities/TradeRecord"
+      },
+      "description": "User-scoped subcollection storing settled BUY/SHORT trade records."
+    },
+    "/users/{userId}/miningRecords/{recordId}": {
+      "schema": {
+        "$ref": "#/entities/MiningRecord"
+      },
+      "description": "User-scoped subcollection storing mining history batches."
+    }
+  }
+}

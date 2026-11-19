@@ -14,6 +14,9 @@ interface MiningRecordDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertRecord(record: MiningRecordEntity)
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertRecords(records: List<MiningRecordEntity>)
+
     @Query("DELETE FROM mining_records")
     suspend fun clearAll()
 }

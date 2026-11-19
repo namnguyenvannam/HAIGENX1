@@ -4,7 +4,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
@@ -12,10 +11,12 @@ import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.ShowChart
+import androidx.compose.material.icons.filled.Storefront
 import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.ShowChart
+import androidx.compose.material.icons.outlined.Storefront
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -30,6 +31,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.core.AppStrings
 import com.example.ui.theme.CharcoalSurface
 import com.example.ui.theme.GoldBorder
@@ -44,6 +46,7 @@ enum class MainTab(
     val testTag: String
 ) {
     MINING("mining", Icons.Filled.Bolt, Icons.Outlined.Bolt, "tab_mining"),
+    SHOP("shop", Icons.Filled.Storefront, Icons.Outlined.Storefront, "tab_shop"),
     AI("ai", Icons.Filled.AutoAwesome, Icons.Outlined.AutoAwesome, "tab_ai"),
     MARKET("market", Icons.Filled.ShowChart, Icons.Outlined.ShowChart, "tab_market"),
     WALLET("wallet", Icons.Filled.AccountBalanceWallet, Icons.Outlined.AccountBalanceWallet, "tab_wallet")
@@ -77,6 +80,7 @@ fun HaigenxBottomBar(
                 val isSelected = currentRoute == tab.route
                 val label = when (tab) {
                     MainTab.MINING -> strings.tabMine
+                    MainTab.SHOP -> strings.tabShop
                     MainTab.AI -> strings.tabAi
                     MainTab.MARKET -> strings.tabMarket
                     MainTab.WALLET -> strings.tabWallet
@@ -96,9 +100,11 @@ fun HaigenxBottomBar(
                         Text(
                             text = label,
                             style = MaterialTheme.typography.labelSmall.copy(
+                                fontSize = 10.5.sp,
                                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
                             ),
                             maxLines = 1,
+                            softWrap = false,
                             overflow = TextOverflow.Ellipsis
                         )
                     },

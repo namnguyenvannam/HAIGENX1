@@ -25,12 +25,21 @@ object FormatUtils {
     }
 
     fun formatUsdtPrice(price: Double, language: AppLanguage): String {
-        val df = DecimalFormat("0.000000##", symbolsFor(language))
-        return df.format(price)
+        val pattern = when {
+            price >= 0.001 -> "0.000000"
+            price >= 0.000001 -> "0.000000##"
+            price >= 0.00000001 -> "0.00000000##"
+            else -> "0.000000000#"
+        }
+        return DecimalFormat(pattern, symbolsFor(language)).format(price)
     }
 
     fun formatUsdtValue(value: Double, language: AppLanguage): String {
-        val pattern = if (value >= 0.01) "#,##0.0000" else "0.00000000"
+        val pattern = when {
+            value >= 0.01 -> "#,##0.0000"
+            value >= 0.000001 || value == 0.0 -> "0.00000000"
+            else -> "0.000000000#"
+        }
         return DecimalFormat(pattern, symbolsFor(language)).format(value)
     }
 

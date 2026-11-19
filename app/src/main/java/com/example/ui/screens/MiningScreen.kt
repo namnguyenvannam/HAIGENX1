@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -33,16 +34,26 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.BatteryChargingFull
 import androidx.compose.material.icons.outlined.ElectricBolt
 import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material.icons.outlined.Speed
+import androidx.compose.material.icons.outlined.TouchApp
+import androidx.compose.material.icons.outlined.Upgrade
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -69,6 +80,7 @@ import com.example.core.AppStrings
 import com.example.core.FormatUtils
 import com.example.ui.components.GoldDustParticleBackground
 import com.example.ui.components.HaigenxCoinLogoBadge
+import com.example.ui.components.ParticipantsCounterBadge
 import com.example.ui.components.StaggeredEntranceCard
 import com.example.ui.components.rememberAnimatedDouble
 import com.example.ui.theme.BronzeDark
@@ -90,14 +102,18 @@ import com.example.ui.theme.TextMuted
 import com.example.ui.theme.WarningAmber
 import com.example.viewmodel.FloatingCoinParticle
 import com.example.viewmodel.MiningUiState
+import com.example.viewmodel.UpgradeItemUi
+import com.example.viewmodel.UpgradeType
 import kotlin.math.roundToInt
 
 @Composable
 fun MiningScreen(
     state: MiningUiState,
+    participantCount: Long?,
     language: AppLanguage,
     strings: AppStrings,
     onMineTap: () -> Boolean,
+    onOpenShopTab: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val haptic = LocalHapticFeedback.current
@@ -172,7 +188,6 @@ fun MiningScreen(
             ),
         contentAlignment = Alignment.TopCenter
     ) {
-        // Lightweight floating golden particles in background
         GoldDustParticleBackground(
             modifier = Modifier.fillMaxSize(),
             particleCount = 20
@@ -186,6 +201,34 @@ fun MiningScreen(
                 .padding(horizontal = 20.dp, vertical = 12.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 10.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                ParticipantsCounterBadge(
+                    count = participantCount,
+                    language = language,
+                    strings = strings
+                )
+
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(GoldSubtleBg)
+                        .border(0.8.dp, GoldPrimary.copy(alpha = 0.45f), RoundedCornerShape(50))
+                        .padding(horizontal = 10.dp, vertical = 5.dp)
+                ) {
+                    Text(
+                        text = "×${FormatUtils.formatHashrate(state.permanentMultiplier, language)}",
+                        style = MonoMetricSmall.copy(fontWeight = FontWeight.Bold),
+                        color = GoldBright
+                    )
+                }
+            }
+
             // Centered Large Balance Card with glowing coin badge
             StaggeredEntranceCard(index = 0) {
                 Column(
@@ -237,19 +280,18 @@ fun MiningScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(18.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
-            // Interactive Mine Hub with Soft Aura, Floating Rotating Coin, Glow Pulse & Flying Coins
+            // Interactive Mine Hub
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(254.dp),
+                    .height(248.dp),
                 contentAlignment = Alignment.Center
             ) {
-                // Soft warm radial aura behind the coin
                 Box(
                     modifier = Modifier
-                        .size(240.dp)
+                        .size(236.dp)
                         .scale(ambientPulse)
                         .clip(CircleShape)
                         .background(
@@ -265,10 +307,9 @@ fun MiningScreen(
                         )
                 )
 
-                // Tap flash halo
                 Box(
                     modifier = Modifier
-                        .size(236.dp)
+                        .size(232.dp)
                         .alpha(tapGlowAlpha.value)
                         .clip(CircleShape)
                         .background(
@@ -282,10 +323,9 @@ fun MiningScreen(
                         )
                 )
 
-                // Main Circular Gold Medallion Mine Button (slow float + gentle 3D yaw)
                 Box(
                     modifier = Modifier
-                        .size(178.dp)
+                        .size(176.dp)
                         .graphicsLayer {
                             scaleX = buttonScale.value
                             scaleY = buttonScale.value
@@ -366,7 +406,6 @@ fun MiningScreen(
                     }
                 }
 
-                // Flying Coins Overlay
                 state.floatingParticles.forEach { particle ->
                     FlyingCoinOverlay(
                         particle = particle,
@@ -375,7 +414,7 @@ fun MiningScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
             // Hashrate & Auto-Mining Status Card
             StaggeredEntranceCard(index = 1) {
@@ -459,7 +498,7 @@ fun MiningScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
             // Energy Bar Card
             StaggeredEntranceCard(index = 2) {
@@ -536,6 +575,85 @@ fun MiningScreen(
                         style = MaterialTheme.typography.bodyMedium,
                         color = if (state.isRechargingPause) WarningAmber else TextMuted
                     )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Mining Upgrade Shop Entry Card
+            StaggeredEntranceCard(index = 3) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(22.dp))
+                        .background(
+                            Brush.horizontalGradient(
+                                colors = listOf(GoldSubtleBg, CharcoalCard.copy(alpha = 0.94f))
+                            )
+                        )
+                        .border(1.dp, GoldPrimary.copy(alpha = 0.55f), RoundedCornerShape(22.dp))
+                        .padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(42.dp)
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(GoldPrimary.copy(alpha = 0.14f))
+                                .border(0.8.dp, GoldBorder, RoundedCornerShape(14.dp)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Upgrade,
+                                contentDescription = strings.upgradeCardTitle,
+                                tint = GoldPrimary,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column {
+                            Text(
+                                text = strings.upgradeCardTitle,
+                                style = MaterialTheme.typography.titleMedium,
+                                color = GoldBright
+                            )
+                            Text(
+                                text = strings.upgradeCardSubtitle,
+                                style = MaterialTheme.typography.bodyMedium.copy(fontSize = 12.sp),
+                                color = TextMuted
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "×${FormatUtils.formatHashrate(state.permanentMultiplier, language)} • ASIC ${strings.upgradeLevelPrefix} ${state.hashrateLevel} • Drill ${strings.upgradeLevelPrefix} ${state.tapPowerLevel}",
+                                style = MonoMetricSmall.copy(fontSize = 11.sp),
+                                color = GoldPrimary
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.width(10.dp))
+
+                    Button(
+                        onClick = onOpenShopTab,
+                        shape = RoundedCornerShape(16.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = GoldPrimary,
+                            contentColor = ObsidianBlack
+                        ),
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .testTag("open_upgrade_shop_button")
+                    ) {
+                        Text(
+                            text = strings.upgradeOpenButton,
+                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
+                        )
+                    }
                 }
             }
 
