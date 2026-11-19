@@ -1,8 +1,10 @@
 package com.example.data.ai
 
+import android.content.Context
 import android.util.Log
 import com.example.core.AppLanguage
 import com.google.firebase.Firebase
+import com.google.firebase.FirebaseApp
 import com.google.firebase.ai.GenerativeModel
 import com.google.firebase.ai.ai
 import com.google.firebase.ai.type.content
@@ -14,7 +16,10 @@ import kotlinx.coroutines.withTimeout
 
 private const val TAG = "AiHaigenxRepository"
 
-class AiHaigenxRepository {
+class AiHaigenxRepository(
+    context: Context? = null
+) {
+    private val appContext: Context? = context?.applicationContext
 
     companion object {
         const val DEFAULT_CHAT_MODEL = "gemini-2.5-flash"
@@ -46,6 +51,16 @@ class AiHaigenxRepository {
     private val modelCache = mutableMapOf<String, GenerativeModel>()
 
     private fun getOrCreateModel(modelName: String): GenerativeModel {
+        appContext?.let { ctx ->
+            val initialized = try {
+                FirebaseApp.getApps(ctx).isNotEmpty() || FirebaseApp.initializeApp(ctx) != null
+            } catch (_: Exception) {
+                false
+            }
+            if (!initialized) {
+                throw IllegalStateException("Firebase is not initialized")
+            }
+        }
         return modelCache.getOrPut(modelName) {
             Firebase.ai.generativeModel(
                 modelName = modelName,

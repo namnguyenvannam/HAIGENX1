@@ -21,19 +21,17 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.Login
-import androidx.compose.material.icons.automirrored.outlined.Logout
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.outlined.AccountCircle
 import androidx.compose.material.icons.outlined.CloudDone
+import androidx.compose.material.icons.outlined.Save
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
@@ -54,8 +52,6 @@ import androidx.compose.ui.unit.sp
 import com.example.core.AppLanguage
 import com.example.core.AppStrings
 import com.example.ui.theme.CharcoalCard
-import com.example.ui.theme.CrimsonBg
-import com.example.ui.theme.CrimsonDown
 import com.example.ui.theme.EmeraldBg
 import com.example.ui.theme.EmeraldUp
 import com.example.ui.theme.GoldBorder
@@ -71,13 +67,11 @@ import kotlinx.coroutines.delay
 @Composable
 fun SettingsScreen(
     accountDisplayName: String,
-    accountEmail: String?,
+    isCloudSynced: Boolean,
     currentLanguage: AppLanguage,
     strings: AppStrings,
     onSelectLanguage: (AppLanguage) -> Unit,
     onSaveDisplayName: (String) -> Unit,
-    onSwitchGoogleAccount: () -> Unit,
-    onSignOut: () -> Unit,
     onNavigateBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -109,7 +103,7 @@ fun SettingsScreen(
                 .padding(horizontal = 20.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            // Google Account, Display Name & Sign-In/Sign-Out Card
+            // Miner Profile & Display Name Card
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -141,7 +135,7 @@ fun SettingsScreen(
                                 color = TextIvory
                             )
                             Text(
-                                text = accountEmail ?: strings.settingsSignedInAs,
+                                text = strings.settingsAccountTitle,
                                 style = MaterialTheme.typography.bodyMedium.copy(fontSize = 12.sp),
                                 color = TextMuted
                             )
@@ -151,22 +145,26 @@ fun SettingsScreen(
                     Row(
                         modifier = Modifier
                             .clip(RoundedCornerShape(50))
-                            .background(EmeraldBg)
-                            .border(0.8.dp, EmeraldUp.copy(alpha = 0.45f), RoundedCornerShape(50))
+                            .background(if (isCloudSynced) EmeraldBg else GoldSubtleBg)
+                            .border(
+                                0.8.dp,
+                                if (isCloudSynced) EmeraldUp.copy(alpha = 0.45f) else GoldBorder,
+                                RoundedCornerShape(50)
+                            )
                             .padding(horizontal = 9.dp, vertical = 4.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
-                            imageVector = Icons.Outlined.CloudDone,
+                            imageVector = if (isCloudSynced) Icons.Outlined.CloudDone else Icons.Outlined.Save,
                             contentDescription = null,
-                            tint = EmeraldUp,
+                            tint = if (isCloudSynced) EmeraldUp else GoldPrimary,
                             modifier = Modifier.size(13.dp)
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            text = strings.settingsCloudSyncedBadge,
+                            text = if (isCloudSynced) strings.settingsCloudSyncedBadge else strings.settingsLocalModeBadge,
                             style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                            color = EmeraldUp
+                            color = if (isCloudSynced) EmeraldUp else GoldBright
                         )
                     }
                 }
@@ -265,64 +263,6 @@ fun SettingsScreen(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(12.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    OutlinedButton(
-                        onClick = onSwitchGoogleAccount,
-                        shape = RoundedCornerShape(16.dp),
-                        colors = ButtonDefaults.outlinedButtonColors(
-                            containerColor = GoldSubtleBg,
-                            contentColor = GoldBright
-                        ),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, GoldPrimary.copy(alpha = 0.65f)),
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(48.dp)
-                            .minimumInteractiveComponentSize()
-                            .testTag("google_login_settings_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Outlined.Login,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = strings.settingsSwitchGoogleButton,
-                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
-                        )
-                    }
-
-                    Button(
-                        onClick = onSignOut,
-                        shape = RoundedCornerShape(16.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = CrimsonBg,
-                            contentColor = CrimsonDown
-                        ),
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(48.dp)
-                            .minimumInteractiveComponentSize()
-                            .border(1.dp, CrimsonDown.copy(alpha = 0.5f), RoundedCornerShape(16.dp))
-                            .testTag("sign_out_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Outlined.Logout,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = strings.settingsSignOutButton,
-                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
-                        )
-                    }
-                }
             }
 
             // Language Selector Card

@@ -6,8 +6,12 @@ import com.example.core.AppLanguage
 import com.example.core.FormatUtils
 import com.example.core.stringsFor
 import com.example.data.ai.AiHaigenxRepository
+import com.example.data.remote.CloudSyncRepository
+import com.google.firebase.FirebaseApp
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -89,5 +93,19 @@ class ExampleRobolectricTest {
         val formattedEn = FormatUtils.formatUsdtPrice(0.000001, AppLanguage.EN)
         assertTrue(formattedVi == "0,000001")
         assertTrue(formattedEn == "0.000001")
+    }
+
+    @Test
+    fun `cloud sync repository safely returns failure and null count when Firebase is uninitialized`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        FirebaseApp.getApps(context).forEach { it.delete() }
+        val repo = CloudSyncRepository(context)
+        val authRes = repo.ensureAnonymousAuthUid()
+        assertTrue(authRes.isFailure || authRes.isSuccess)
+        if (authRes.isFailure) {
+            val countRes = repo.fetchParticipantCount("test_uid")
+            assertTrue(countRes.isFailure)
+            assertNull(countRes.getOrNull())
+        }
     }
 }

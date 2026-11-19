@@ -1,13 +1,14 @@
 package com.example.data.remote
 
 import android.content.Context
-import com.example.R
+import android.util.Log
 import com.example.data.local.MiningSourceType
 import com.example.data.local.PersistedGameData
 import com.example.data.local.TradeDirection
 import com.example.data.local.TradeOutcome
 import com.example.data.local.TradeRecordEntity
 import com.google.firebase.Firebase
+import com.google.firebase.FirebaseApp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.auth
 import com.google.firebase.firestore.AggregateSource
@@ -26,26 +27,124 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.tasks.await
 
-class CloudSyncRepository(
-    private val db: FirebaseFirestore,
-    private val auth: FirebaseAuth = Firebase.auth
+private const val TAG = "CloudSyncRepository"
+
+class CloudSyncRepository private constructor(
+    private val appContext: Context?,
+    private val dbOverride: FirebaseFirestore?,
+    private val authOverride: FirebaseAuth?
 ) {
     constructor(context: Context) : this(
-        FirebaseFirestore.getInstance(
-            context.applicationContext.getString(R.string.firestore_database_id)
-        )
+        appContext = context.applicationContext,
+        dbOverride = null,
+        authOverride = null
     )
 
-    private fun requireUserId(expectedUserId: String): String {
-        val uid = auth.currentUser?.uid
-            ?: throw IllegalStateException("User must be signed in with Google before accessing Firestore.")
-        check(uid == expectedUserId) { "Signed-in user changed; refusing cross-user Firestore operation." }
-        return uid
+    constructor(
+        db: FirebaseFirestore,
+        auth: FirebaseAuth
+    ) : this(
+        appContext = null,
+        dbOverride = db,
+        authOverride = auth
+    )
+
+    fun isFirebaseInitialized(): Boolean {
+        return try {
+            if (dbOverride != null && authOverride != null) {
+                true
+            } else {
+                val ctx = appContext ?: return false
+                FirebaseApp.getApps(ctx).isNotEmpty() || FirebaseApp.initializeApp(ctx) != null
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Firebase initialization check failed: ${e.message}")
+            false
+        }
+    }
+
+    private fun getAuthOrNull(): FirebaseAuth? {
+        return try {
+            if (authOverride != null) {
+                authOverride
+            } else if (isFirebaseInitialized()) {
+                Firebase.auth
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "FirebaseAuth unavailable: ${e.message}")
+            null
+        }
+    }
+
+    private fun getFirestoreOrNull(): FirebaseFirestore? {
+        return try {
+            if (dbOverride != null) {
+                dbOverride
+            } else if (isFirebaseInitialized()) {
+                val ctx = appContext ?: return null
+                val resId = ctx.resources.getIdentifier(
+                    "firestore_database_id",
+                    "string",
+                    ctx.packageName
+                )
+                if (resId != 0) {
+                    val databaseId = ctx.getString(resId)
+                    if (databaseId.isNotBlank()) {
+                        FirebaseFirestore.getInstance(databaseId)
+                    } else {
+                        FirebaseFirestore.getInstance()
+                    }
+                } else {
+                    FirebaseFirestore.getInstance()
+                }
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "FirebaseFirestore unavailable: ${e.message}")
+            null
+        }
+    }
+
+    private fun requireReadyContext(expectedUserId: String): Pair<FirebaseFirestore, String> {
+        val db = getFirestoreOrNull()
+            ?: throw IllegalStateException("FirebaseFirestore is not initialized.")
+        val auth = getAuthOrNull()
+            ?: throw IllegalStateException("FirebaseAuth is not initialized.")
+        val uid = auth.currentUser?.uid?.takeIf { it.isNotBlank() }
+            ?: throw IllegalStateException("Anonymous Firebase user is not signed in.")
+        check(uid == expectedUserId) { "Authenticated UID changed; refusing cross-user Firestore operation." }
+        return db to uid
     }
 
     private fun sanitizeDisplayName(rawName: String): String {
         val cleaned = rawName.trim().take(80)
         return cleaned.ifEmpty { "HAIGENX1 Miner" }
+    }
+
+    /**
+     * Signs in anonymously via Firebase Auth when Firebase is configured.
+     * Safe when google-services.json is absent or Anonymous Auth is unavailable.
+     */
+    suspend fun ensureAnonymousAuthUid(): Result<String> {
+        return try {
+            val auth = getAuthOrNull()
+                ?: return Result.failure(IllegalStateException("Firebase is not initialized"))
+            auth.currentUser?.uid?.takeIf { it.isNotBlank() }?.let { existingUid ->
+                return Result.success(existingUid)
+            }
+            val result = auth.signInAnonymously().await()
+            val uid = result.user?.uid?.takeIf { it.isNotBlank() }
+                ?: return Result.failure(IllegalStateException("Anonymous auth returned null UID"))
+            Result.success(uid)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "Anonymous Firebase auth failed or unconfigured: ${e.message}")
+            Result.failure(e)
+        }
     }
 
     /**
@@ -55,7 +154,7 @@ class CloudSyncRepository(
     suspend fun ensureParticipantRegisteredOnce(userId: String): Result<Boolean> {
         val docPath = "participants/$userId"
         return try {
-            val uid = requireUserId(userId)
+            val (db, uid) = requireReadyContext(userId)
             require(uid.matches(VALID_ID_REGEX)) { "Invalid participant ID" }
             val docRef = db.collection("participants").document(uid)
             val existing = docRef.get(Source.SERVER).await()
@@ -79,12 +178,12 @@ class CloudSyncRepository(
 
     /**
      * Reads the exact server-side participant count using Firestore count aggregation.
-     * Uses AggregateSource.SERVER so offline clients reliably receive a failure and render "--".
+     * Uses AggregateSource.SERVER so offline/unconfigured clients cleanly receive failure and render "--".
      */
     suspend fun fetchParticipantCount(userId: String): Result<Long> {
         val path = "participants"
         return try {
-            requireUserId(userId)
+            val (db, _) = requireReadyContext(userId)
             val aggregate = db.collection("participants")
                 .count()
                 .get(AggregateSource.SERVER)
@@ -101,7 +200,7 @@ class CloudSyncRepository(
     suspend fun fetchUserProfile(userId: String): Result<FirestoreUserProfile?> {
         val docPath = "users/$userId"
         return try {
-            val uid = requireUserId(userId)
+            val (db, uid) = requireReadyContext(userId)
             val snapshot = db.collection("users").document(uid).get().await()
             if (!snapshot.exists()) {
                 Result.success(null)
@@ -127,7 +226,7 @@ class CloudSyncRepository(
     ): Result<Unit> {
         val docPath = "users/$userId"
         return try {
-            val uid = requireUserId(userId)
+            val (db, uid) = requireReadyContext(userId)
             val payload = mapOf(
                 "userId" to uid,
                 "displayName" to sanitizeDisplayName(displayName),
@@ -172,7 +271,7 @@ class CloudSyncRepository(
     ): Result<Unit> {
         val docPath = "users/$userId"
         return try {
-            val uid = requireUserId(userId)
+            val (db, uid) = requireReadyContext(userId)
             val payload = mapOf(
                 "displayName" to sanitizeDisplayName(displayName),
                 "balanceHx1" to balanceHx1.coerceAtLeast(0.0),
@@ -201,7 +300,7 @@ class CloudSyncRepository(
     suspend fun updateDisplayName(userId: String, displayName: String): Result<Unit> {
         val docPath = "users/$userId"
         return try {
-            val uid = requireUserId(userId)
+            val (db, uid) = requireReadyContext(userId)
             val payload = mapOf(
                 "displayName" to sanitizeDisplayName(displayName),
                 "updatedAt" to FieldValue.serverTimestamp()
@@ -219,7 +318,7 @@ class CloudSyncRepository(
     suspend fun saveTradeRecord(userId: String, trade: TradeRecordEntity): Result<Unit> {
         val docPath = "users/$userId/trades/${trade.id}"
         return try {
-            val uid = requireUserId(userId)
+            val (db, uid) = requireReadyContext(userId)
             require(trade.id.isNotBlank() && trade.id.matches(VALID_ID_REGEX)) {
                 "Invalid trade ID"
             }
@@ -252,46 +351,52 @@ class CloudSyncRepository(
     }
 
     fun observeTrades(userId: String): Flow<List<TradeRecordEntity>> = flow {
-        val uid = requireUserId(userId)
-        val path = "users/$uid/trades"
-        emitAll(
-            db.collection("users").document(uid).collection("trades")
-                .orderBy("timestampMillis", Query.Direction.DESCENDING)
-                .limit(50)
-                .snapshots()
-                .map { snapshot ->
-                    snapshot.toObjects(
-                        FirestoreTradeRecord::class.java,
-                        DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
-                    ).map { remote ->
-                        TradeRecordEntity(
-                            id = remote.id,
-                            direction = TradeDirection.entries.firstOrNull { it.name == remote.direction }?.name
-                                ?: TradeDirection.BUY.name,
-                            leverage = remote.leverage.coerceIn(1, 10),
-                            entryFeeHx1 = remote.entryFeeHx1,
-                            entryPriceUsdt = remote.entryPriceUsdt,
-                            exitPriceUsdt = remote.exitPriceUsdt,
-                            outcome = TradeOutcome.entries.firstOrNull { it.name == remote.outcome }?.name
-                                ?: TradeOutcome.TIE.name,
-                            payoutHx1 = remote.payoutHx1,
-                            netPnlHx1 = remote.netPnlHx1,
-                            timestampMillis = remote.timestampMillis
-                        )
+        val path = "users/$userId/trades"
+        try {
+            val (db, uid) = requireReadyContext(userId)
+            emitAll(
+                db.collection("users").document(uid).collection("trades")
+                    .orderBy("timestampMillis", Query.Direction.DESCENDING)
+                    .limit(50)
+                    .snapshots()
+                    .map { snapshot ->
+                        snapshot.toObjects(
+                            FirestoreTradeRecord::class.java,
+                            DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                        ).map { remote ->
+                            TradeRecordEntity(
+                                id = remote.id,
+                                direction = TradeDirection.entries.firstOrNull { it.name == remote.direction }?.name
+                                    ?: TradeDirection.BUY.name,
+                                leverage = remote.leverage.coerceIn(1, 10),
+                                entryFeeHx1 = remote.entryFeeHx1,
+                                entryPriceUsdt = remote.entryPriceUsdt,
+                                exitPriceUsdt = remote.exitPriceUsdt,
+                                outcome = TradeOutcome.entries.firstOrNull { it.name == remote.outcome }?.name
+                                    ?: TradeOutcome.TIE.name,
+                                payoutHx1 = remote.payoutHx1,
+                                netPnlHx1 = remote.netPnlHx1,
+                                timestampMillis = remote.timestampMillis
+                            )
+                        }
                     }
-                }
-                .catch { error ->
-                    val firestoreError = generateSequence(error) { it.cause }
-                        .filterIsInstance<FirebaseFirestoreException>()
-                        .firstOrNull()
-                    if (firestoreError == null && error is CancellationException) throw error
-                    val exceptionToLog = firestoreError ?: (error as? Exception)
-                    if (exceptionToLog != null && auth.currentUser?.uid == uid) {
-                        handleFirestoreError(exceptionToLog, OperationType.LIST, path)
+                    .catch { error ->
+                        val firestoreError = generateSequence(error) { it.cause }
+                            .filterIsInstance<FirebaseFirestoreException>()
+                            .firstOrNull()
+                        if (firestoreError == null && error is CancellationException) throw error
+                        val exceptionToLog = firestoreError ?: (error as? Exception)
+                        if (exceptionToLog != null) {
+                            handleFirestoreError(exceptionToLog, OperationType.LIST, path)
+                        }
+                        throw error
                     }
-                    throw error
-                }
-        )
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.LIST, path)
+        }
     }
 
     suspend fun saveMiningRecord(
@@ -304,7 +409,7 @@ class CloudSyncRepository(
     ): Result<Unit> {
         val docPath = "users/$userId/miningRecords/$recordId"
         return try {
-            val uid = requireUserId(userId)
+            val (db, uid) = requireReadyContext(userId)
             if (amountHx1 <= 0.0) return Result.success(Unit)
             require(recordId.isNotBlank() && recordId.matches(VALID_ID_REGEX)) {
                 "Invalid mining record ID"
@@ -333,7 +438,7 @@ class CloudSyncRepository(
     suspend fun fetchRecentMiningRecords(userId: String): Result<List<FirestoreMiningRecord>> {
         val path = "users/$userId/miningRecords"
         return try {
-            val uid = requireUserId(userId)
+            val (db, uid) = requireReadyContext(userId)
             val snapshot = db.collection("users").document(uid)
                 .collection("miningRecords")
                 .orderBy("timestampMillis", Query.Direction.DESCENDING)

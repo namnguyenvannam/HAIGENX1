@@ -139,8 +139,6 @@ data class AdBoostDialogState(
 )
 
 class GameViewModel(
-    private val currentUserId: String,
-    private val displayName: String,
     private val prefsRepo: GamePreferencesRepository,
     private val miningHistoryRepo: MiningHistoryRepository,
     private val tradeHistoryRepo: TradeHistoryRepository,
@@ -172,12 +170,13 @@ class GameViewModel(
     private val _cloudSyncStatus = MutableStateFlow<String?>(null)
     val cloudSyncStatus: StateFlow<String?> = _cloudSyncStatus.asStateFlow()
 
+    private val _isCloudSynced = MutableStateFlow(false)
+    val isCloudSynced: StateFlow<Boolean> = _isCloudSynced.asStateFlow()
+
     private val _participantCount = MutableStateFlow<Long?>(null)
     val participantCount: StateFlow<Long?> = _participantCount.asStateFlow()
 
-    private val _accountDisplayName = MutableStateFlow(
-        displayName.trim().ifEmpty { "HAIGENX1 Miner" }
-    )
+    private val _accountDisplayName = MutableStateFlow("HAIGENX1 Miner")
     val accountDisplayName: StateFlow<String> = _accountDisplayName.asStateFlow()
 
     val miningHistory: StateFlow<List<MiningRecordEntity>> = miningHistoryRepo.recentRecords
@@ -194,6 +193,7 @@ class GameViewModel(
             initialValue = emptyList()
         )
 
+    private var cloudUserId: String? = null
     private var boostExpiresAtMillis: Long = 0L
     private var hashrateLevel: Int = 0
     private var tapPowerLevel: Int = 0
@@ -206,6 +206,7 @@ class GameViewModel(
     private var aiRequestJob: Job? = null
     private var tradeCountdownJob: Job? = null
     private var tradeSettlementClearJob: Job? = null
+    private var tradeObserverJob: Job? = null
     private var manualTapBatchAmount: Double = 0.0
     private var manualTapBatchCount: Int = 0
     private var isCloudProfileReady: Boolean = false
@@ -254,118 +255,143 @@ class GameViewModel(
                 nextNewsInSeconds = Random.nextInt(30, 91)
             )
 
-            // Hydrate / link Firestore profile for currentUserId
-            val remoteProfileResult = cloudSyncRepo.fetchUserProfile(currentUserId)
-            val remoteProfile = remoteProfileResult.getOrNull()
-            if (remoteProfileResult.isSuccess) {
-                if (remoteProfile == null) {
-                    val initialSnapshot = savedLocal.copy(
-                        balanceHx1 = activeBalance,
-                        energy = activeEnergy,
+            ensureWelcomeMessage(savedLocal.language)
+            startMiningLoop()
+            startMarketEngineLoop()
+
+            // Non-blocking Firebase Anonymous Auth + Firestore sync & participants counter
+            launch {
+                hydrateCloudIfConfigured(
+                    savedLocal = savedLocal,
+                    initialBalance = activeBalance,
+                    initialEnergy = activeEnergy,
+                    initialPrice = activePrice,
+                    initialUsdtIndex = activeUsdtIndex,
+                    nowMillis = now
+                )
+            }
+            startParticipantsCounterLoop()
+        }
+    }
+
+    private suspend fun hydrateCloudIfConfigured(
+        savedLocal: PersistedGameData,
+        initialBalance: Double,
+        initialEnergy: Double,
+        initialPrice: Double,
+        initialUsdtIndex: Double,
+        nowMillis: Long
+    ) {
+        val uid = cloudSyncRepo.ensureAnonymousAuthUid().getOrNull() ?: return
+        cloudUserId = uid
+
+        val remoteProfileResult = cloudSyncRepo.fetchUserProfile(uid)
+        val remoteProfile = remoteProfileResult.getOrNull()
+        if (remoteProfileResult.isSuccess) {
+            if (remoteProfile == null) {
+                val initialSnapshot = savedLocal.copy(
+                    balanceHx1 = initialBalance,
+                    energy = initialEnergy,
+                    hashrateLevel = hashrateLevel,
+                    tapPowerLevel = tapPowerLevel,
+                    energyLevel = energyLevel,
+                    multiplierLevel = multiplierLevel,
+                    turboMultiplierLevel = turboMultiplierLevel,
+                    boostExpiresAtMillis = boostExpiresAtMillis,
+                    simulatedPriceUsdt = initialPrice,
+                    usdtVirtualIndex = initialUsdtIndex,
+                    lastActiveMillis = nowMillis
+                )
+                cloudSyncRepo.createUserProfile(uid, _accountDisplayName.value, initialSnapshot)
+                    .onSuccess {
+                        isCloudProfileReady = true
+                        _isCloudSynced.value = true
+                    }
+                    .onFailure { _cloudSyncStatus.value = it.localizedMessage }
+            } else {
+                isCloudProfileReady = true
+                _isCloudSynced.value = true
+                if (remoteProfile.displayName.isNotBlank() && savedLocal.customDisplayName.isBlank()) {
+                    _accountDisplayName.value = remoteProfile.displayName
+                }
+                val preferCloud = remoteProfile.lastActiveMillis >= savedLocal.lastActiveMillis ||
+                    remoteProfile.balanceHx1 > _miningState.value.balanceHx1
+                if (preferCloud) {
+                    hashrateLevel = remoteProfile.hashrateLevel.coerceIn(0, MiningUpgrades.MAX_CORE_UPGRADE_LEVEL)
+                    tapPowerLevel = remoteProfile.tapPowerLevel.coerceIn(0, MiningUpgrades.MAX_CORE_UPGRADE_LEVEL)
+                    energyLevel = remoteProfile.energyLevel.coerceIn(0, MiningUpgrades.MAX_CORE_UPGRADE_LEVEL)
+                    multiplierLevel = remoteProfile.multiplierLevel.coerceIn(0, MiningUpgrades.MAX_OVERCLOCK_LEVEL)
+                    turboMultiplierLevel = remoteProfile.turboMultiplierLevel.coerceIn(0, MiningUpgrades.MAX_TURBO_RIG_LEVEL)
+                    boostExpiresAtMillis = maxOf(boostExpiresAtMillis, remoteProfile.boostExpiresAtMillis)
+                    val mergedBalance = maxOf(_miningState.value.balanceHx1, remoteProfile.balanceHx1)
+                    val maxE = MiningUpgrades.maxEnergyForLevel(energyLevel)
+                    val mergedEnergy = remoteProfile.energy.coerceIn(0.0, maxE)
+                    val mergedPrice = remoteProfile.simulatedPriceUsdt.coerceIn(MIN_PRICE_USDT, MAX_PRICE_USDT)
+                    val mergedUsdtIndex = remoteProfile.usdtVirtualIndex.coerceIn(MIN_USDT_INDEX, MAX_USDT_INDEX)
+                    if (remoteProfile.displayName.isNotBlank()) {
+                        _accountDisplayName.value = remoteProfile.displayName
+                    }
+
+                    _miningState.value = buildMiningState(
+                        balance = mergedBalance,
+                        energy = mergedEnergy,
+                        nowMillis = System.currentTimeMillis(),
+                        particles = emptyList()
+                    )
+                    _marketState.update { m ->
+                        m.copy(
+                            currentPriceUsdt = mergedPrice,
+                            priceHistory = listOf(mergedPrice),
+                            usdtVirtualIndex = mergedUsdtIndex,
+                            usdtHistory = listOf(mergedUsdtIndex)
+                        )
+                    }
+                    prefsRepo.applyCloudSnapshot(
+                        displayName = _accountDisplayName.value,
+                        balanceHx1 = mergedBalance,
+                        energy = mergedEnergy,
                         hashrateLevel = hashrateLevel,
                         tapPowerLevel = tapPowerLevel,
                         energyLevel = energyLevel,
                         multiplierLevel = multiplierLevel,
                         turboMultiplierLevel = turboMultiplierLevel,
                         boostExpiresAtMillis = boostExpiresAtMillis,
-                        simulatedPriceUsdt = activePrice,
-                        usdtVirtualIndex = activeUsdtIndex,
-                        lastActiveMillis = now
+                        simulatedPriceUsdt = mergedPrice,
+                        usdtVirtualIndex = mergedUsdtIndex,
+                        lastActiveMillis = System.currentTimeMillis()
                     )
-                    cloudSyncRepo.createUserProfile(currentUserId, _accountDisplayName.value, initialSnapshot)
-                        .onSuccess { isCloudProfileReady = true }
-                        .onFailure { _cloudSyncStatus.value = it.localizedMessage }
                 } else {
-                    isCloudProfileReady = true
-                    if (remoteProfile.displayName.isNotBlank() && savedLocal.customDisplayName.isBlank()) {
-                        _accountDisplayName.value = remoteProfile.displayName
-                    }
-                    // Merge cloud & local cleanly so returning users keep cloud progress
-                    val preferCloud = remoteProfile.lastActiveMillis >= savedLocal.lastActiveMillis ||
-                        remoteProfile.balanceHx1 > activeBalance
-                    if (preferCloud) {
-                        hashrateLevel = remoteProfile.hashrateLevel.coerceIn(0, MiningUpgrades.MAX_CORE_UPGRADE_LEVEL)
-                        tapPowerLevel = remoteProfile.tapPowerLevel.coerceIn(0, MiningUpgrades.MAX_CORE_UPGRADE_LEVEL)
-                        energyLevel = remoteProfile.energyLevel.coerceIn(0, MiningUpgrades.MAX_CORE_UPGRADE_LEVEL)
-                        multiplierLevel = remoteProfile.multiplierLevel.coerceIn(0, MiningUpgrades.MAX_OVERCLOCK_LEVEL)
-                        turboMultiplierLevel = remoteProfile.turboMultiplierLevel.coerceIn(0, MiningUpgrades.MAX_TURBO_RIG_LEVEL)
-                        boostExpiresAtMillis = maxOf(boostExpiresAtMillis, remoteProfile.boostExpiresAtMillis)
-                        activeBalance = maxOf(activeBalance, remoteProfile.balanceHx1)
-                        val maxE = MiningUpgrades.maxEnergyForLevel(energyLevel)
-                        activeEnergy = remoteProfile.energy.coerceIn(0.0, maxE)
-                        activePrice = remoteProfile.simulatedPriceUsdt.coerceIn(MIN_PRICE_USDT, MAX_PRICE_USDT)
-                        activeUsdtIndex = remoteProfile.usdtVirtualIndex.coerceIn(MIN_USDT_INDEX, MAX_USDT_INDEX)
-                        if (remoteProfile.displayName.isNotBlank()) {
-                            _accountDisplayName.value = remoteProfile.displayName
-                        }
-
-                        _miningState.value = buildMiningState(
-                            balance = activeBalance,
-                            energy = activeEnergy,
-                            nowMillis = System.currentTimeMillis(),
-                            particles = emptyList()
-                        )
-                        _marketState.update { m ->
-                            m.copy(
-                                currentPriceUsdt = activePrice,
-                                priceHistory = listOf(activePrice),
-                                usdtVirtualIndex = activeUsdtIndex,
-                                usdtHistory = listOf(activeUsdtIndex)
-                            )
-                        }
-                        prefsRepo.applyCloudSnapshot(
-                            displayName = _accountDisplayName.value,
-                            balanceHx1 = activeBalance,
-                            energy = activeEnergy,
-                            hashrateLevel = hashrateLevel,
-                            tapPowerLevel = tapPowerLevel,
-                            energyLevel = energyLevel,
-                            multiplierLevel = multiplierLevel,
-                            turboMultiplierLevel = turboMultiplierLevel,
-                            boostExpiresAtMillis = boostExpiresAtMillis,
-                            simulatedPriceUsdt = activePrice,
-                            usdtVirtualIndex = activeUsdtIndex,
-                            lastActiveMillis = System.currentTimeMillis()
-                        )
-                    } else {
-                        syncProfileToCloudNow()
-                    }
-                }
-            } else {
-                _cloudSyncStatus.value = remoteProfileResult.exceptionOrNull()?.localizedMessage
-            }
-
-            // Hydrate recent mining records from cloud if local Room is empty
-            if (miningHistoryRepo.recentRecords.first().isEmpty()) {
-                cloudSyncRepo.fetchRecentMiningRecords(currentUserId).onSuccess { remoteLogs ->
-                    remoteLogs.forEach { rec ->
-                        val source = MiningSourceType.entries.firstOrNull { it.name == rec.sourceType }
-                            ?: MiningSourceType.AUTO
-                        miningHistoryRepo.logMining(rec.amountHx1, source, rec.hashrateSnapshot)
-                    }
+                    syncProfileToCloudNow()
                 }
             }
+        } else {
+            _cloudSyncStatus.value = remoteProfileResult.exceptionOrNull()?.localizedMessage
+        }
 
-            // Observe real-time cloud trades with two-tier CancellationException handling
-            launch {
-                cloudSyncRepo.observeTrades(currentUserId)
-                    .catch { error ->
-                        if (error is CancellationException &&
-                            generateSequence<Throwable>(error) { it.cause }.none { it is com.google.firebase.firestore.FirebaseFirestoreException }
-                        ) {
-                            throw error
-                        }
-                        Log.w(TAG, "Trade listener error", error)
-                    }
-                    .collect { remoteTrades ->
-                        tradeHistoryRepo.upsertCloudTrades(remoteTrades)
-                    }
+        if (miningHistoryRepo.recentRecords.first().isEmpty()) {
+            cloudSyncRepo.fetchRecentMiningRecords(uid).onSuccess { remoteLogs ->
+                remoteLogs.forEach { rec ->
+                    val source = MiningSourceType.entries.firstOrNull { it.name == rec.sourceType }
+                        ?: MiningSourceType.AUTO
+                    miningHistoryRepo.logMining(rec.amountHx1, source, rec.hashrateSnapshot)
+                }
             }
+        }
 
-            ensureWelcomeMessage(savedLocal.language)
-            startParticipantsCounterLoop()
-            startMiningLoop()
-            startMarketEngineLoop()
+        tradeObserverJob?.cancel()
+        tradeObserverJob = viewModelScope.launch {
+            cloudSyncRepo.observeTrades(uid)
+                .catch { error ->
+                    if (error is CancellationException &&
+                        generateSequence<Throwable>(error) { it.cause }.none { it is com.google.firebase.firestore.FirebaseFirestoreException }
+                    ) {
+                        throw error
+                    }
+                    Log.w(TAG, "Trade listener error", error)
+                }
+                .collect { remoteTrades ->
+                    tradeHistoryRepo.upsertCloudTrades(remoteTrades)
+                }
         }
     }
 
@@ -381,12 +407,26 @@ class GameViewModel(
     private fun startParticipantsCounterLoop() {
         viewModelScope.launch {
             while (isActive) {
-                if (!participantRegistered) {
-                    cloudSyncRepo.ensureParticipantRegisteredOnce(currentUserId)
-                        .onSuccess { participantRegistered = true }
+                try {
+                    val uid = cloudUserId ?: cloudSyncRepo.ensureAnonymousAuthUid().getOrNull()?.also {
+                        cloudUserId = it
+                    }
+                    if (uid != null) {
+                        if (!participantRegistered) {
+                            cloudSyncRepo.ensureParticipantRegisteredOnce(uid)
+                                .onSuccess { participantRegistered = true }
+                        }
+                        val countResult = cloudSyncRepo.fetchParticipantCount(uid)
+                        _participantCount.value = countResult.getOrNull()
+                    } else {
+                        _participantCount.value = null
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w(TAG, "Participant counter update skipped: ${e.message}")
+                    _participantCount.value = null
                 }
-                val countResult = cloudSyncRepo.fetchParticipantCount(currentUserId)
-                _participantCount.value = countResult.getOrNull()
                 delay(PARTICIPANTS_POLL_INTERVAL_MS)
             }
         }
@@ -479,9 +519,10 @@ class GameViewModel(
                     val source = if (isBoosted) MiningSourceType.BOOST_BONUS else MiningSourceType.AUTO
                     val hashSnap = MiningUpgrades.baseHashrateForLevel(hashrateLevel) * totalMult
                     miningHistoryRepo.logMining(amountToLog, source, hashSnap)
-                    if (isCloudProfileReady) {
+                    val uid = cloudUserId
+                    if (isCloudProfileReady && uid != null) {
                         cloudSyncRepo.saveMiningRecord(
-                            userId = currentUserId,
+                            userId = uid,
                             recordId = UUID.randomUUID().toString(),
                             amountHx1 = amountToLog,
                             sourceType = source,
@@ -835,8 +876,9 @@ class GameViewModel(
             lastActiveMillis = now
         )
 
-        if (isCloudProfileReady) {
-            cloudSyncRepo.saveTradeRecord(currentUserId, tradeRecord)
+        val uid = cloudUserId
+        if (isCloudProfileReady && uid != null) {
+            cloudSyncRepo.saveTradeRecord(uid, tradeRecord)
             syncProfileToCloudNow()
         }
     }
@@ -972,8 +1014,9 @@ class GameViewModel(
         _accountDisplayName.value = cleaned
         viewModelScope.launch {
             prefsRepo.saveCustomDisplayName(cleaned)
-            if (isCloudProfileReady) {
-                cloudSyncRepo.updateDisplayName(currentUserId, cleaned)
+            val uid = cloudUserId
+            if (isCloudProfileReady && uid != null) {
+                cloudSyncRepo.updateDisplayName(uid, cleaned)
             }
         }
     }
@@ -1031,9 +1074,10 @@ class GameViewModel(
                     boostExpiresAtMillis = boostExpiresAtMillis,
                     lastActiveMillis = now
                 )
-                if (isCloudProfileReady) {
+                val uid = cloudUserId
+                if (isCloudProfileReady && uid != null) {
                     cloudSyncRepo.saveMiningRecord(
-                        userId = currentUserId,
+                        userId = uid,
                         recordId = UUID.randomUUID().toString(),
                         amountHx1 = amount,
                         sourceType = MiningSourceType.MANUAL,
@@ -1177,36 +1221,13 @@ class GameViewModel(
         }
     }
 
-    suspend fun flushStateBeforeSignOut() {
-        adCountdownJob?.cancel()
-        aiRequestJob?.cancel()
-        tradeCountdownJob?.cancel()
-        val now = System.currentTimeMillis()
-        val m = _miningState.value
-        val mk = _marketState.value
-        prefsRepo.applyCloudSnapshot(
-            displayName = _accountDisplayName.value,
-            balanceHx1 = m.balanceHx1,
-            energy = m.energy,
-            hashrateLevel = hashrateLevel,
-            tapPowerLevel = tapPowerLevel,
-            energyLevel = energyLevel,
-            multiplierLevel = multiplierLevel,
-            turboMultiplierLevel = turboMultiplierLevel,
-            boostExpiresAtMillis = boostExpiresAtMillis,
-            simulatedPriceUsdt = mk.currentPriceUsdt,
-            usdtVirtualIndex = mk.usdtVirtualIndex,
-            lastActiveMillis = now
-        )
-        syncProfileToCloudNow()
-    }
-
     private suspend fun syncProfileToCloudNow() {
+        val uid = cloudUserId ?: return
         if (!isCloudProfileReady) return
         val m = _miningState.value
         val mk = _marketState.value
         cloudSyncRepo.updateUserProgress(
-            userId = currentUserId,
+            userId = uid,
             displayName = _accountDisplayName.value,
             balanceHx1 = m.balanceHx1,
             energy = m.energy,
